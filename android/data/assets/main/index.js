@@ -1094,6 +1094,9 @@ System.register("chunks:///_virtual/BikeEffects.ts", ['cc', './Config.ts', './As
           if (dict && Number(dict.blendFuncSource) === gfx.BlendFactor.ONE && Number(dict.blendFuncDestination) === gfx.BlendFactor.ONE_MINUS_SRC_ALPHA) {
             dict.blendFuncSource = gfx.BlendFactor.SRC_ALPHA;
           }
+          // the system re-reads the plist in __preload, which waits while the level is built under an
+          // inactive layer (GameRoot.startLevel): put the position type in the plist too
+          if (dict) dict.positionType = ParticleSystem2D.PositionType.RELATIVE;
           ps.file = asset;
           ps.positionType = ParticleSystem2D.PositionType.RELATIVE;
           // Cocos stops drawing a system as soon as it is stopped (cocos2d lets the living particles
@@ -3846,6 +3849,7 @@ System.register("chunks:///_virtual/GameRoot.ts", ['./rollupPluginModLoBabelHelp
             }
           });
           this.hud.placeNitro(this.controls.controlSettings.tilt);
+          this.hud.setNitro(this.session.nitroCount);
           this.hud.message('GO!');
           this.scheduleOnce(() => {
             var _this$hud2;
@@ -4258,6 +4262,8 @@ System.register("chunks:///_virtual/GameSession.ts", ['cc', './planck.mjs', './C
           /** Bodies that touched a boundary (action 6) during the last step. */
           this.boundaryTouches = [];
           this.fading = new Map();
+          /** Objects that faded out: hidden until the level resets. */
+          this.fadedOut = new Set();
           /** Trigger action 3: regions the bike just left (their "leaveEvent" is sent after the step). */
           this.deactivations = [];
           this.headlight = null;
@@ -4789,6 +4795,7 @@ System.register("chunks:///_virtual/GameSession.ts", ['cc', './planck.mjs', './C
             this.worldView.setOpacity(this.ownersOf(f.idx), f.alpha);
             if (f.alpha <= 0) {
               this.fading.delete(body);
+              this.fadedOut.add(f.idx);
               this.setLoaded(f.idx, body, false);
             }
           });
@@ -4971,10 +4978,8 @@ System.register("chunks:///_virtual/GameSession.ts", ['cc', './planck.mjs', './C
          * goes. The terrain mesh and mounted sprites stay drawn, so a level can switch which half of a
          * loop the bike collides with (1-2: the z 2 front and z -6 back rock) without either vanishing.
          */
-        /** PhysicsObject -load / -unload: an unloaded object leaves the physics and the screen. */
         setLoaded(idx, body, on) {
           body.setActive(on);
-          this.worldView.setOpacity(this.ownersOf(idx), on ? 1 : 0);
         }
 
         /** The entity and the sprites mounted on it. */
@@ -5049,7 +5054,11 @@ System.register("chunks:///_virtual/GameSession.ts", ['cc', './planck.mjs', './C
             b.setAngularVelocity(0);
             b.setAwake(s.awake);
           });
+          // faded objects come back (opacity 1 only on what was faded: no UIOpacity added to every object)
+          this.fading.forEach(f => this.worldView.setOpacity(this.ownersOf(f.idx), 1));
+          this.fadedOut.forEach(idx => this.worldView.setOpacity(this.ownersOf(idx), 1));
           this.fading.clear();
+          this.fadedOut.clear();
           this.boundaryTouches = [];
           this.bodies.forEach((b, idx) => this.setLoaded(idx, b, true));
           this.builder.rebuildJoints();
@@ -8357,7 +8366,7 @@ System.register("chunks:///_virtual/ResultView.ts", ['cc', './CcbAnimator.ts', '
 });
 
 System.register("chunks:///_virtual/Screens.ts", ['cc', './Config.ts', './CcbButton.ts', './Assets.ts', './Progress.ts', './CcbView.ts'], function (exports) {
-  var cclegacy, UITransform, Label, Node, Sprite, WORLDS, CCB_CLICK, preloadFrames, getRecord, formatTime, findNode;
+  var cclegacy, UITransform, Label, Node, Sprite, UIOpacity, WORLDS, CCB_CLICK, preloadFrames, getRecord, formatTime, findNode;
   return {
     setters: [function (module) {
       cclegacy = module.cclegacy;
@@ -8365,6 +8374,7 @@ System.register("chunks:///_virtual/Screens.ts", ['cc', './Config.ts', './CcbBut
       Label = module.Label;
       Node = module.Node;
       Sprite = module.Sprite;
+      UIOpacity = module.UIOpacity;
     }, function (module) {
       WORLDS = module.WORLDS;
     }, function (module) {
@@ -8384,6 +8394,8 @@ System.register("chunks:///_virtual/Screens.ts", ['cc', './Config.ts', './CcbBut
       /** Nitro charges that fill the HUD gauge, and the colour strip's scale along the gauge when full. */
       const NITRO_FULL = 3;
       const NITRO_FILL = 1.27;
+      /** Opacity of the nitro button with no charge (greyed out). */
+      const NITRO_EMPTY_OPACITY = 140;
 
       /** Sheets and textures the menus and the HUD take frames from by name. */
       async function preloadUi() {
@@ -8462,9 +8474,15 @@ System.register("chunks:///_virtual/Screens.ts", ['cc', './Config.ts', './CcbBut
           }
         }
 
-        /** The gauge on the left edge: full from NITRO_FULL charges up (the port counts charges, not fuel). */
+        /**
+         * The gauge on the left edge: full from NITRO_FULL charges up (the port counts charges, not fuel). The
+         * button greys out while there is no charge to use.
+         */
         setNitro(n) {
           this.nitroFill.setScale(NITRO_FILL * Math.min(1, n / NITRO_FULL), this.nitroFill.scale.y, 1);
+          this.nitro.getComponent(Sprite).grayscale = n <= 0;
+          const op = this.nitro.getComponent(UIOpacity) || this.nitro.addComponent(UIOpacity);
+          op.opacity = n > 0 ? 255 : NITRO_EMPTY_OPACITY;
         }
         message(text) {
           this.msg.string = text;
